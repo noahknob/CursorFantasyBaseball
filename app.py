@@ -302,33 +302,39 @@ def show_oauth_setup() -> None:
         unsafe_allow_html=True,
     )
 
+    # ── Auto-handle Yahoo's redirect back with ?code= ────────────────────────
+    params = st.query_params
+    callback_code = params.get("code", "")
+    if callback_code:
+        with st.spinner("Completing authorization…"):
+            try:
+                exchange_code(callback_code.strip())
+                load_dotenv(override=True)
+                # Clear the ?code= from the URL so a page refresh doesn't re-use it
+                st.query_params.clear()
+                st.success("✓ Authorization successful! Loading your league…")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Authorization failed: {exc}")
+                st.query_params.clear()
+        st.stop()
+
     st.info(
         "**First-time setup:** This app needs access to your Yahoo Fantasy league. "
-        "Complete the one-time authorization below — it takes about 30 seconds."
+        "Click the button below — Yahoo will redirect back here automatically."
     )
 
     auth_url = get_auth_url()
 
     st.markdown("### Authorization Steps")
     st.markdown(
-        f"**Step 1 →** [Click here to open Yahoo's authorization page]({auth_url})",
+        f"**Step 1 →** [Click here to authorize with Yahoo]({auth_url})",
         unsafe_allow_html=True,
     )
     st.caption(
-        "Make sure you're signed in to the Yahoo account that manages league **469.l.12591**."
+        "Make sure you're signed in to the Yahoo account that manages league **469.l.12591**. "
+        "After you approve access, Yahoo will redirect you back here automatically."
     )
-    st.markdown("**Step 2 →** Yahoo will display a short verification code. Copy it.")
-
-    code = st.text_input("**Step 3 →** Paste the verification code here:", key="oauth_code")
-    if st.button("Complete Authorization", type="primary") and code:
-        with st.spinner("Exchanging code for tokens…"):
-            try:
-                exchange_code(code.strip())
-                load_dotenv(override=True)
-                st.success("✓ Authorization successful! Loading your league…")
-                st.rerun()
-            except Exception as exc:
-                st.error(f"Authorization failed: {exc}")
 
     st.stop()
 
