@@ -1,24 +1,32 @@
 {
   "1": {
     "team": "SALivating for Cum",
+    "manager_guid": "JBHI4FEKQJKJBA34SQS6FR5KPE",
+    "manager_name": "Ryan",
     "score": 100.5,
     "batting": 52.5,
     "pitching": 48.0
   },
   "2": {
     "team": "LeavemeSTRANDedfacedownassup",
+    "manager_guid": "Y6IJT4FZJEF3TOOSWKHSCSLPMY",
+    "manager_name": "Noah Knoblauch",
     "score": 85.5,
     "batting": 48.0,
     "pitching": 37.5
   },
   "3": {
     "team": "SALivating for Cum",
+    "manager_guid": "JBHI4FEKQJKJBA34SQS6FR5KPE",
+    "manager_name": "Ryan",
     "score": 90.0,
     "batting": 51.0,
     "pitching": 39.0
   },
   "4": {
     "team": "IdSuckAJuniorOrElderIDontCare",
+    "manager_guid": "36QPBDIIECZQPRRHX25DRUG6AI",
+    "manager_name": "D-Cach",
     "score": 101.5,
     "batting": 49.0,
     "pitching": 52.5

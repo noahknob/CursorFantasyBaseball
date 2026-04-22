@@ -41,10 +41,36 @@ def get_auth_url() -> str:
     )
 
 
+def _save_refresh_token(token: str) -> None:
+    """Persist token to InstantDB (cloud) and .env (local). Fails silently."""
+    try:
+        import instant_db as _idb
+        _idb.save_refresh_token(token)
+    except Exception:
+        pass
+    try:
+        set_key(str(_ENV_FILE), "YAHOO_REFRESH_TOKEN", token)
+        _load_env()
+    except Exception:
+        pass
+
+
+def _load_refresh_token() -> str:
+    """Return the most up-to-date refresh token: InstantDB first, then env."""
+    try:
+        import instant_db as _idb
+        token = _idb.load_refresh_token()
+        if token:
+            return token
+    except Exception:
+        pass
+    return os.getenv("YAHOO_REFRESH_TOKEN", "").strip()
+
+
 def exchange_code(code: str) -> str:
     """
     Exchange a Yahoo authorization code for access + refresh tokens.
-    Saves the refresh token to .env and returns the access token.
+    Saves the refresh token to InstantDB and .env, then returns the access token.
     """
     _load_env()
     headers = _basic_auth_header()
@@ -57,20 +83,19 @@ def exchange_code(code: str) -> str:
     resp.raise_for_status()
     tokens = resp.json()
 
-    refresh_token = tokens["refresh_token"]
-    set_key(str(_ENV_FILE), "YAHOO_REFRESH_TOKEN", refresh_token)
-    _load_env()
+    _save_refresh_token(tokens["refresh_token"])
     return tokens["access_token"]
 
 
 def get_access_token() -> str:
     """
     Load the saved refresh token and exchange it for a fresh access token.
-    Also rotates the refresh token in .env if Yahoo issues a new one.
+    Prefers the InstantDB-stored token (survives cloud restarts) over .env.
+    Rotates the token in both InstantDB and .env if Yahoo issues a new one.
     Raises ValueError if no refresh token has been saved yet.
     """
     _load_env()
-    refresh_token = os.getenv("YAHOO_REFRESH_TOKEN", "").strip()
+    refresh_token = _load_refresh_token()
     if not refresh_token:
         raise ValueError(
             "No Yahoo refresh token found. Complete the one-time OAuth setup first."
@@ -88,15 +113,14 @@ def get_access_token() -> str:
 
     new_refresh = tokens.get("refresh_token", "").strip()
     if new_refresh and new_refresh != refresh_token:
-        set_key(str(_ENV_FILE), "YAHOO_REFRESH_TOKEN", new_refresh)
-        _load_env()
+        _save_refresh_token(new_refresh)
 
     return tokens["access_token"]
 
 
 def has_refresh_token() -> bool:
     _load_env()
-    return bool(os.getenv("YAHOO_REFRESH_TOKEN", "").strip())
+    return bool(_load_refresh_token())
 
 
 # ─── CLI one-time setup ───────────────────────────────────────────────────────

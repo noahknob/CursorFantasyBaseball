@@ -13,6 +13,7 @@ import requests
 from auth import get_access_token
 
 BASE_URL = "https://fantasysports.yahooapis.com/fantasy/v2"
+SOCIAL_BASE_URL = "https://social.yahooapis.com/v1"
 LEAGUE_KEY = "469.l.12591"
 
 STAT_ID_MAP: dict[str, str] = {
@@ -74,21 +75,36 @@ def _parse_team(team_data: list) -> tuple:
     Parse a Yahoo team entry.
 
     team_data is [info_list, stats_obj]:
-      info_list – list of single-key dicts (team_key, name, …)
+      info_list – list of single-key dicts (team_key, name, managers, …)
       stats_obj – dict with a 'team_stats' key
 
-    Returns (team_name_or_None, stats_dict).
+    Returns (team_name_or_None, stats_dict, manager_guid_or_None, manager_nickname_or_None).
     """
     if not team_data:
-        return None, {}
+        return None, {}, None, None
 
     info_list = team_data[0] if isinstance(team_data[0], list) else [team_data[0]]
 
     name: str | None = None
+    manager_guid: str | None = None
+    manager_nickname: str | None = None
+
     for item in info_list:
-        if isinstance(item, dict) and "name" in item:
+        if not isinstance(item, dict):
+            continue
+        if "name" in item and name is None:
             name = item["name"]
-            break
+        if "managers" in item and manager_guid is None:
+            managers_val = item["managers"]
+            # Yahoo returns managers as a list of {"manager": {...}} dicts
+            if isinstance(managers_val, list) and managers_val:
+                mgr = managers_val[0].get("manager", {})
+            elif isinstance(managers_val, dict):
+                mgr = managers_val.get("manager", {})
+            else:
+                mgr = {}
+            manager_guid = mgr.get("guid") or None
+            manager_nickname = mgr.get("nickname") or None
 
     stats: dict[str, float] = {}
     if len(team_data) > 1:
@@ -99,7 +115,7 @@ def _parse_team(team_data: list) -> tuple:
             if isinstance(raw_stats, list):
                 stats = _parse_stats(raw_stats)
 
-    return name, stats
+    return name, stats, manager_guid, manager_nickname
 
 
 # ─── Public API ───────────────────────────────────────────────────────────────
@@ -146,7 +162,7 @@ def get_week_stats(week: int) -> dict:
             for j in range(team_count):
                 team_obj = teams_container.get(str(j), {})
                 team_data = team_obj.get("team", [])
-                name, stats = _parse_team(team_data)
+                name, stats, _, _ = _parse_team(team_data)
                 if name:
                     teams_stats[name] = stats
 
@@ -173,7 +189,7 @@ def get_season_stats() -> dict:
         for i in range(count):
             team_obj = teams_container.get(str(i), {})
             team_data = team_obj.get("team", [])
-            name, stats = _parse_team(team_data)
+            name, stats, _, _ = _parse_team(team_data)
             if name:
                 teams_stats[name] = stats
 
@@ -181,3 +197,109 @@ def get_season_stats() -> dict:
 
     except Exception as exc:
         raise RuntimeError(f"Failed to get season stats: {exc}") from exc
+
+
+def get_week_team_managers(week: int) -> dict:
+    """
+    Parse the scoreboard for a given week and return manager info per team.
+
+    Returns {team_name: {"guid": str, "nickname": str}}.
+    Uses the same scoreboard endpoint as get_week_stats.
+    """
+    try:
+        data = _api_get(f"league/{LEAGUE_KEY}/scoreboard;week={week}")
+        league = data["fantasy_content"]["league"]
+
+        scoreboard = league[1].get("scoreboard", {})
+        inner = scoreboard.get("0", scoreboard)
+        matchups = inner.get("matchups", scoreboard.get("matchups", {}))
+
+        count = int(matchups.get("count", 0))
+        team_managers: dict[str, dict] = {}
+
+        for i in range(count):
+            matchup_wrapper = matchups.get(str(i), {})
+            matchup = matchup_wrapper.get("matchup", matchup_wrapper)
+
+            teams_wrapper = matchup.get("0", matchup)
+            teams_container = teams_wrapper.get("teams", {})
+            team_count = int(teams_container.get("count", 0))
+
+            for j in range(team_count):
+                team_obj = teams_container.get(str(j), {})
+                team_data = team_obj.get("team", [])
+                name, _, guid, nickname = _parse_team(team_data)
+                if name and guid:
+                    team_managers[name] = {"guid": guid, "nickname": nickname or ""}
+
+        return team_managers
+
+    except Exception as exc:
+        raise RuntimeError(f"Failed to get week {week} team managers: {exc}") from exc
+
+
+def get_manager_profile(guid: str) -> dict:
+    """
+    Fetch a manager's real name from the Yahoo Social API.
+
+    Returns {"first_name": str, "last_name": str}.
+    Falls back to empty strings on any error (privacy settings, 401/403, etc.).
+    """
+    try:
+        token = get_access_token()
+        url = f"{SOCIAL_BASE_URL}/user/{guid}/profile?format=json"
+        resp = requests.get(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        profile = resp.json().get("profile", {})
+
+        first_name = profile.get("givenName", "")
+        if isinstance(first_name, dict):
+            first_name = first_name.get("value", "")
+
+        last_name = profile.get("familyName", "")
+        if isinstance(last_name, dict):
+            last_name = last_name.get("value", "")
+
+        return {"first_name": str(first_name), "last_name": str(last_name)}
+    except Exception:
+        return {"first_name": "", "last_name": ""}
+
+
+def get_league_managers() -> dict:
+    """
+    Fetch all current teams, resolve manager GUIDs, then enrich with real first
+    names from the Yahoo Social API.
+
+    Returns {guid: {"first_name": str, "nickname": str}}.
+    Falls back to nickname when the Social API is unavailable for a user.
+    """
+    try:
+        data = _api_get(f"league/{LEAGUE_KEY}/teams")
+        league = data["fantasy_content"]["league"]
+        teams_container = league[1].get("teams", {})
+        count = int(teams_container.get("count", 0))
+
+        managers: dict[str, dict] = {}
+        for i in range(count):
+            team_obj = teams_container.get(str(i), {})
+            team_data = team_obj.get("team", [])
+            _, _, guid, nickname = _parse_team(team_data)
+            if guid and guid not in managers:
+                managers[guid] = {
+                    "first_name": nickname or guid,
+                    "nickname": nickname or "",
+                }
+
+        for guid, info in managers.items():
+            profile = get_manager_profile(guid)
+            if profile["first_name"]:
+                info["first_name"] = profile["first_name"]
+
+        return managers
+
+    except Exception as exc:
+        raise RuntimeError(f"Failed to get league managers: {exc}") from exc
