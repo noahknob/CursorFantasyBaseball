@@ -7,21 +7,24 @@ Tabs:
   3. Weekly Winners – cards for each completed week's winner
 """
 
-import json
+from __future__ import annotations
+
 from datetime import date, timedelta
-from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
 from auth import exchange_code, get_auth_url, has_refresh_token
+import instant_db
 from roto import ALL_CATS, BATTING_CATS, PITCHING_CATS, calculate_roto
-from yahoo_api import get_current_week, get_season_stats, get_week_stats
-
-# ─── Constants ────────────────────────────────────────────────────────────────
-
-WINNERS_FILE = Path(__file__).parent / "weekly_winners.json"
+from yahoo_api import (
+    get_current_week,
+    get_league_managers,
+    get_season_stats,
+    get_week_stats,
+    get_week_team_managers,
+)
 
 INT_STATS = {"R", "HR", "RBI", "SB", "XBH", "W", "SV", "K", "QS"}
 
@@ -116,30 +119,68 @@ st.markdown(
 # ─── Weekly winners helpers ───────────────────────────────────────────────────
 
 def load_winners() -> dict:
-    if WINNERS_FILE.exists():
-        try:
-            return json.loads(WINNERS_FILE.read_text())
-        except Exception:
-            pass
-    return {}
+    try:
+        return instant_db.load_winners()
+    except Exception:
+        return {}
 
 
 def save_winners(data: dict) -> None:
-    WINNERS_FILE.write_text(json.dumps(data, indent=2))
+    try:
+        instant_db.save_winners(data)
+    except Exception as exc:
+        st.warning(f"Could not save winners to InstantDB: {exc}")
+
+
+def _resolve_manager_name(guid: str | None, nickname: str, manager_profiles: dict) -> str:
+    """Return the best available display name for a manager."""
+    if guid:
+        profile = manager_profiles.get(guid, {})
+        first_name = profile.get("first_name", "")
+        if first_name and first_name != guid:
+            return first_name
+    return nickname or guid or ""
 
 
 def backfill_weekly_winners(current_week: int) -> dict:
     """
     For every completed week (1 … current_week-1) not yet in the JSON,
     fetch stats, calculate roto, and persist the winner.
+    Also migrates existing entries that are missing manager_guid.
     Returns the updated winners dict.
     """
     winners = load_winners()
     changed = False
 
+    # Resolve real names from Social API (falls back gracefully per manager)
+    try:
+        manager_profiles = cached_league_managers()
+    except Exception:
+        manager_profiles = {}
+
     for week in range(1, current_week):
-        if str(week) in winners:
+        week_str = str(week)
+
+        # Migration: backfill manager info for existing entries that lack it
+        if week_str in winners and "manager_guid" not in winners[week_str]:
+            try:
+                team_managers = get_week_team_managers(week)
+                team_name = winners[week_str]["team"]
+                mgr_info = team_managers.get(team_name, {})
+                guid = mgr_info.get("guid")
+                nickname = mgr_info.get("nickname", "")
+                winners[week_str]["manager_guid"] = guid
+                winners[week_str]["manager_name"] = _resolve_manager_name(
+                    guid, nickname, manager_profiles
+                ) or team_name
+                changed = True
+            except Exception:
+                pass
             continue
+
+        if week_str in winners:
+            continue
+
         try:
             stats = get_week_stats(week)
             if not stats:
@@ -148,8 +189,26 @@ def backfill_weekly_winners(current_week: int) -> dict:
             if roto_df.empty:
                 continue
             top = roto_df.iloc[0]
-            winners[str(week)] = {
-                "team": top["Team"],
+            team_name = top["Team"]
+
+            # Fetch manager GUID from scoreboard and resolve real name
+            manager_guid = None
+            manager_name = team_name
+            try:
+                team_managers = get_week_team_managers(week)
+                mgr_info = team_managers.get(team_name, {})
+                manager_guid = mgr_info.get("guid")
+                nickname = mgr_info.get("nickname", "")
+                manager_name = _resolve_manager_name(
+                    manager_guid, nickname, manager_profiles
+                ) or team_name
+            except Exception:
+                pass
+
+            winners[week_str] = {
+                "team": team_name,
+                "manager_guid": manager_guid,
+                "manager_name": manager_name,
                 "score": float(top["Total"]),
                 "batting": float(top["Batting"]),
                 "pitching": float(top["Pitching"]),
@@ -290,6 +349,11 @@ def cached_current_week() -> int:
     return get_current_week()
 
 
+@st.cache_data(ttl=3600)
+def cached_league_managers() -> dict:
+    return get_league_managers()
+
+
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -317,6 +381,7 @@ def main() -> None:
             st.cache_data.clear()
             for key in ("backfill_done", "winners"):
                 st.session_state.pop(key, None)
+            st.session_state["run_backfill"] = True
             st.rerun()
 
     # ── Resolve current week ─────────────────────────────────────────────────
@@ -326,11 +391,23 @@ def main() -> None:
         st.error(f"Failed to connect to Yahoo API: {exc}")
         st.stop()
 
-    # ── Backfill weekly winners (once per session) ───────────────────────────
-    if "backfill_done" not in st.session_state:
+    # ── Load winners: backfill only when explicitly refreshed or new week found ──
+    if st.session_state.pop("run_backfill", False):
         with st.spinner("Syncing historical week results…"):
             st.session_state["winners"] = backfill_weekly_winners(current_week)
             st.session_state["backfill_done"] = True
+    elif "winners" not in st.session_state:
+        # Fast path: load from JSON directly — no Yahoo API calls needed
+        stored = load_winners()
+        completed_weeks = set(str(w) for w in range(1, current_week))
+        has_new_weeks = not completed_weeks.issubset(stored.keys())
+        needs_migration = any("manager_guid" not in v for v in stored.values())
+        if has_new_weeks or needs_migration:
+            with st.spinner("Syncing historical week results…"):
+                st.session_state["winners"] = backfill_weekly_winners(current_week)
+        else:
+            st.session_state["winners"] = stored
+        st.session_state["backfill_done"] = True
 
     winners: dict = st.session_state.get("winners", load_winners())
 
@@ -375,6 +452,23 @@ def main() -> None:
                 "The first winner will appear here after week 1 is finished."
             )
         else:
+            # ── Manager leaderboard ──────────────────────────────────────────
+            from collections import Counter
+
+            win_counts = Counter(
+                info.get("manager_name") or info["team"]
+                for info in winners.values()
+            )
+            leaderboard_df = pd.DataFrame(
+                [
+                    {"Rank": i + 1, "Manager": name, "Wins": count}
+                    for i, (name, count) in enumerate(win_counts.most_common())
+                ]
+            )
+            st.subheader("Manager Leaderboard")
+            st.dataframe(leaderboard_df, use_container_width=True, hide_index=True)
+            st.divider()
+
             if "selected_winner_week" not in st.session_state:
                 st.session_state["selected_winner_week"] = None
 
@@ -384,12 +478,21 @@ def main() -> None:
 
             for idx, week_str in enumerate(sorted_weeks):
                 info = winners[week_str]
+                manager_display = info.get("manager_name") or info["team"]
+                team_display = info["team"]
+                # Only show team name in parens when it differs from the manager display name
+                name_line = (
+                    f'🏆 {manager_display} '
+                    f'<span style="color:#9ca3af;font-size:0.9rem">({team_display})</span>'
+                    if manager_display != team_display
+                    else f"🏆 {manager_display}"
+                )
                 with cols[idx % 2]:
                     st.markdown(
                         f"""
                         <div class="winner-card">
                             <p class="week-label">Week {week_str}</p>
-                            <p class="team-name">🏆 {info["team"]}</p>
+                            <p class="team-name">{name_line}</p>
                             <p class="score-line">
                                 Score: <strong>{info["score"]:.1f}</strong> / 120
                                 &nbsp;·&nbsp;
@@ -411,8 +514,15 @@ def main() -> None:
             sel_week = st.session_state.get("selected_winner_week")
             if sel_week is not None:
                 st.divider()
-                winner_name = winners[sel_week]["team"]
-                st.subheader(f"Week {sel_week} · {winner_name}")
+                sel_info = winners[sel_week]
+                manager_display = sel_info.get("manager_name") or sel_info["team"]
+                team_display = sel_info["team"]
+                panel_title = (
+                    f"Week {sel_week} · {manager_display} ({team_display})"
+                    if manager_display != team_display
+                    else f"Week {sel_week} · {manager_display}"
+                )
+                st.subheader(panel_title)
                 try:
                     with st.spinner(f"Loading week {sel_week} stats…"):
                         week_data = cached_week_stats(int(sel_week))
