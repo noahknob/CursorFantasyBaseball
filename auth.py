@@ -16,6 +16,11 @@ from dotenv import load_dotenv, set_key
 YAHOO_AUTH_URL = "https://api.login.yahoo.com/oauth2/request_auth"
 YAHOO_TOKEN_URL = "https://api.login.yahoo.com/oauth2/get_token"
 
+# Registered redirect URI in Yahoo Developer console.
+# Must exactly match what is configured at
+# https://developer.yahoo.com/apps/ → your app → Redirect URI(s).
+YAHOO_REDIRECT_URI = "https://weeklyroto.streamlit.app/"
+
 _ENV_FILE = Path(__file__).parent / ".env"
 
 
@@ -36,7 +41,7 @@ def get_auth_url() -> str:
     return (
         f"{YAHOO_AUTH_URL}"
         f"?client_id={client_id}"
-        "&redirect_uri=oob"
+        f"&redirect_uri={YAHOO_REDIRECT_URI}"
         "&response_type=code"
     )
 
@@ -76,7 +81,7 @@ def exchange_code(code: str) -> str:
     headers = _basic_auth_header()
     data = {
         "grant_type": "authorization_code",
-        "redirect_uri": "oob",
+        "redirect_uri": YAHOO_REDIRECT_URI,
         "code": code,
     }
     resp = requests.post(YAHOO_TOKEN_URL, headers=headers, data=data, timeout=30)
@@ -128,11 +133,19 @@ def has_refresh_token() -> bool:
 if __name__ == "__main__":
     print("Yahoo Fantasy Sports — One-Time OAuth Setup")
     print("=" * 45)
+    print(
+        "\nNOTE: This CLI flow is for local use only."
+        f"\n      The redirect URI is set to: {YAHOO_REDIRECT_URI}"
+        "\n      After authorizing, Yahoo will redirect to that URL."
+        "\n      Copy the 'code' query-parameter value from the redirected URL."
+    )
     url = get_auth_url()
     print("\nOpening Yahoo authorization page in your browser...")
     webbrowser.open(url)
     print(f"\nIf the browser didn't open, visit:\n{url}")
-    code = input("\nPaste the verification code shown by Yahoo: ").strip()
+    code = input(
+        "\nPaste the 'code' value from the redirect URL: "
+    ).strip()
     try:
         exchange_code(code)
         print("\n✓ Success! Your refresh token has been saved to .env")
