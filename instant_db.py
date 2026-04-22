@@ -68,6 +68,40 @@ def load_winners() -> dict:
     }
 
 
+# Fixed UUID for the single app-config record (stores rotated Yahoo token, etc.)
+_CONFIG_UUID = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+
+
+def save_refresh_token(token: str) -> None:
+    """Persist the Yahoo refresh token to InstantDB so it survives server restarts."""
+    resp = requests.post(
+        f"{INSTANT_BASE_URL}/admin/transact",
+        headers=_headers(),
+        json={
+            "steps": [
+                ["update", "appConfig", _CONFIG_UUID, {"yahooRefreshToken": token}]
+            ]
+        },
+        timeout=15,
+    )
+    resp.raise_for_status()
+
+
+def load_refresh_token() -> str:
+    """Return the persisted Yahoo refresh token from InstantDB, or '' if not found."""
+    resp = requests.post(
+        f"{INSTANT_BASE_URL}/admin/query",
+        headers=_headers(),
+        json={"query": {"appConfig": {}}},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    items = resp.json().get("appConfig", [])
+    if items:
+        return str(items[0].get("yahooRefreshToken", ""))
+    return ""
+
+
 def save_winners(winners: dict) -> None:
     """
     Upsert all entries in `winners` to InstantDB in a single transaction.

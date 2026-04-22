@@ -9,6 +9,7 @@ Tabs:
 
 from __future__ import annotations
 
+import os
 from datetime import date, timedelta
 
 import pandas as pd
@@ -358,6 +359,15 @@ def cached_league_managers() -> dict:
 
 def main() -> None:
     load_dotenv(override=True)
+
+    # On Streamlit Cloud there is no .env file — sync st.secrets into os.environ
+    # so all downstream modules (auth, instant_db) can use os.getenv as normal.
+    try:
+        for _k, _v in st.secrets.items():
+            if _k not in os.environ:
+                os.environ[_k] = str(_v)
+    except Exception:
+        pass
 
     if not has_refresh_token():
         show_oauth_setup()
