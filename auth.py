@@ -19,7 +19,7 @@ YAHOO_TOKEN_URL = "https://api.login.yahoo.com/oauth2/get_token"
 # Registered redirect URI in Yahoo Developer console.
 # Must exactly match what is configured at
 # https://developer.yahoo.com/apps/ → your app → Redirect URI(s).
-YAHOO_REDIRECT_URI = "https://weeklyroto.streamlit.app/"
+YAHOO_REDIRECT_URI = "https://weeklyroto1.streamlit.app/"
 
 _ENV_FILE = Path(__file__).parent / ".env"
 
