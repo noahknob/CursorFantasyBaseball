@@ -16,7 +16,13 @@ import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
 
-from auth import exchange_code, get_auth_url, has_refresh_token
+from auth import (
+    OOB_REDIRECT_URI,
+    exchange_code,
+    get_auth_url,
+    get_oauth_config_errors,
+    has_refresh_token,
+)
 import instant_db
 from roto import ALL_CATS, BATTING_CATS, PITCHING_CATS, calculate_roto
 from yahoo_api import (
@@ -319,12 +325,26 @@ def show_oauth_setup() -> None:
                 st.query_params.clear()
         st.stop()
 
+    config_errors = get_oauth_config_errors()
+    if config_errors:
+        st.error(
+            "Yahoo OAuth is not fully configured for this app. Fix the missing "
+            "settings below, then reload the page."
+        )
+        for err in config_errors:
+            st.code(err)
+        st.caption(
+            "On Streamlit Cloud, add these values in the app Secrets settings. "
+            "The redirect URI must exactly match the Yahoo Developer app."
+        )
+        st.stop()
+
     st.info(
         "**First-time setup:** This app needs access to your Yahoo Fantasy league. "
-        "Click the button below — Yahoo will redirect back here automatically."
+        "Authorize with Yahoo, copy the verification code Yahoo shows, then paste it below."
     )
 
-    auth_url = get_auth_url()
+    auth_url = get_auth_url(redirect_uri=OOB_REDIRECT_URI)
 
     st.markdown("### Authorization Steps")
     st.markdown(
@@ -333,8 +353,24 @@ def show_oauth_setup() -> None:
     )
     st.caption(
         "Make sure you're signed in to the Yahoo account that manages league **469.l.12591**. "
-        "After you approve access, Yahoo will redirect you back here automatically."
+        "After you approve access, Yahoo will show a short verification code."
     )
+    code = st.text_input(
+        "Step 2 → Paste Yahoo's verification code",
+        placeholder="Example: ca6s8b7",
+    ).strip()
+    if st.button("Complete Yahoo authorization", type="primary", use_container_width=True):
+        if not code:
+            st.warning("Paste the Yahoo verification code before continuing.")
+        else:
+            with st.spinner("Completing authorization…"):
+                try:
+                    exchange_code(code, redirect_uri=OOB_REDIRECT_URI)
+                    load_dotenv(override=True)
+                    st.success("✓ Authorization successful! Loading your league…")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Authorization failed: {exc}")
 
     with st.expander("🔍 Debug: view generated auth URL"):
         st.code(auth_url)
@@ -373,7 +409,7 @@ def main() -> None:
     # so all downstream modules (auth, instant_db) can use os.getenv as normal.
     try:
         for _k, _v in st.secrets.items():
-            if _k not in os.environ:
+            if not os.environ.get(_k):
                 os.environ[_k] = str(_v)
     except Exception:
         pass
