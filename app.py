@@ -1,5 +1,5 @@
 """
-Fantasy Baseball Roto Standings — Streamlit app.
+Fantasy Baseball BB Roto Standings — Streamlit app.
 
 Tabs:
   1. This Week    – live weekly roto standings + raw stats
@@ -38,8 +38,8 @@ INT_STATS = {"R", "HR", "RBI", "SB", "XBH", "W", "SV", "K", "QS"}
 # ─── Page config & global CSS ─────────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="Fantasy Baseball Roto",
-    page_icon="⚾",
+    page_title="Fantasy Baseball BB Roto Standings",
+    page_icon="🏆",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -47,44 +47,149 @@ st.set_page_config(
 st.markdown(
     """
     <style>
+    /* ── Global app styling ─────────────────── */
+    .stApp {
+        background:
+            radial-gradient(circle at top left, rgba(124, 58, 237, 0.14), transparent 28%),
+            radial-gradient(circle at top right, rgba(59, 130, 246, 0.12), transparent 22%),
+            linear-gradient(180deg, #f8f7ff 0%, #eef2ff 100%);
+        color: #111827;
+    }
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 2rem;
+    }
+    h1, h2, h3 {
+        color: #111827;
+        letter-spacing: -0.02em;
+    }
+    [data-testid="stTabs"] {
+        background: rgba(255, 255, 255, 0.72);
+        border: 1px solid rgba(139, 92, 246, 0.12);
+        border-radius: 18px;
+        padding: 0.5rem 0.65rem 0.8rem 0.65rem;
+        box-shadow: 0 18px 40px rgba(76, 29, 149, 0.08);
+    }
+    [data-testid="stTabs"] [data-baseweb="tab-list"] {
+        gap: 0.5rem;
+        margin-bottom: 0.75rem;
+    }
+    [data-testid="stTabs"] [data-baseweb="tab"] {
+        background: rgba(139, 92, 246, 0.08);
+        border-radius: 999px;
+        padding: 0.55rem 1rem;
+        color: #5b21b6;
+        font-weight: 600;
+    }
+    [data-testid="stTabs"] [aria-selected="true"] {
+        background: linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%);
+        color: white;
+        box-shadow: 0 10px 24px rgba(109, 40, 217, 0.22);
+    }
+    [data-testid="stDataFrame"] {
+        border: 1px solid rgba(139, 92, 246, 0.12);
+        border-radius: 14px;
+        overflow: hidden;
+        box-shadow: 0 18px 40px rgba(15, 23, 42, 0.06);
+        background: rgba(255, 255, 255, 0.88);
+    }
+    [data-testid="stMetric"] {
+        background: rgba(255, 255, 255, 0.9);
+        border: 1px solid rgba(139, 92, 246, 0.12);
+        border-radius: 14px;
+        padding: 0.75rem 1rem;
+    }
+    .stButton > button {
+        border-radius: 12px;
+        border: 0;
+        background: linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%);
+        color: white;
+        font-weight: 700;
+        box-shadow: 0 10px 24px rgba(109, 40, 217, 0.22);
+    }
+    .stButton > button:hover {
+        background: linear-gradient(135deg, #6d28d9 0%, #4338ca 100%);
+        color: white;
+    }
+
     /* ── Header ──────────────────────────────── */
     .roto-header {
-        background: #1a1a2e;
-        padding: 1.4rem 2rem;
-        border-radius: 10px;
+        background:
+            radial-gradient(circle at top right, rgba(255, 255, 255, 0.22), transparent 24%),
+            linear-gradient(135deg, #4c1d95 0%, #6d28d9 52%, #2563eb 100%);
+        padding: 1.55rem 1.8rem;
+        border-radius: 22px;
         margin-bottom: 1.25rem;
+        box-shadow: 0 22px 48px rgba(67, 56, 202, 0.22);
+        border: 1px solid rgba(255, 255, 255, 0.16);
+    }
+    .roto-header .brand-row {
+        display: flex;
+        align-items: center;
+        gap: 0.9rem;
+        margin-bottom: 0.45rem;
+    }
+    .roto-header .brand-icon {
+        width: 52px;
+        height: 52px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.16);
+        backdrop-filter: blur(8px);
+        flex: 0 0 auto;
+    }
+    .roto-header .brand-icon svg {
+        width: 32px;
+        height: 32px;
+        stroke: white;
+        fill: none;
+        stroke-width: 1.9;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+    }
+    .roto-header .eyebrow {
+        color: rgba(237, 233, 254, 0.88);
+        margin: 0 0 0.2rem 0;
+        font-size: 0.78rem;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
     }
     .roto-header h1 {
         color: white;
         margin: 0;
-        font-size: 1.9rem;
+        font-size: 2.15rem;
         font-weight: 700;
         letter-spacing: -0.02em;
     }
     .roto-header p {
-        color: #9ca3af;
-        margin: 0.3rem 0 0 0;
-        font-size: 0.9rem;
+        color: rgba(237, 233, 254, 0.92);
+        margin: 0.35rem 0 0 0;
+        font-size: 0.96rem;
     }
 
     /* ── Subtitles ───────────────────────────── */
     .roto-subtitle {
-        color: #6b7280;
-        font-size: 0.88rem;
-        font-style: italic;
-        margin-bottom: 0.75rem;
+        color: #5b21b6;
+        font-size: 0.93rem;
+        font-weight: 600;
+        margin-bottom: 0.85rem;
     }
 
     /* ── Winner cards ────────────────────────── */
     .winner-card {
-        background: #1a1a2e;
-        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.88);
+        border-radius: 18px;
         padding: 1rem 1.25rem;
         margin-bottom: 0.8rem;
-        border-left: 4px solid #f59e0b;
+        border: 1px solid rgba(139, 92, 246, 0.12);
+        border-left: 4px solid #8b5cf6;
+        box-shadow: 0 18px 34px rgba(15, 23, 42, 0.06);
     }
     .winner-card .week-label {
-        color: #f59e0b;
+        color: #7c3aed;
         font-size: 0.78rem;
         font-weight: 700;
         text-transform: uppercase;
@@ -92,31 +197,32 @@ st.markdown(
         margin: 0 0 0.2rem 0;
     }
     .winner-card .team-name {
-        color: white;
+        color: #111827;
         font-size: 1.25rem;
         font-weight: 700;
         margin: 0 0 0.35rem 0;
     }
     .winner-card .score-line {
-        color: #9ca3af;
+        color: #6b7280;
         font-size: 0.85rem;
         margin: 0;
     }
     .winner-card .score-line strong {
-        color: #e5e7eb;
+        color: #312e81;
     }
 
     /* ── Auth setup card ─────────────────────── */
     .auth-card {
-        background: #1a1a2e;
-        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.9);
+        border-radius: 18px;
         padding: 2rem;
         max-width: 560px;
         margin: 3rem auto;
-        border: 1px solid #2d2d4e;
+        border: 1px solid rgba(139, 92, 246, 0.12);
+        box-shadow: 0 22px 48px rgba(15, 23, 42, 0.08);
     }
-    .auth-card h2 { color: white; margin: 0 0 0.5rem 0; }
-    .auth-card p  { color: #9ca3af; margin: 0 0 1.5rem 0; }
+    .auth-card h2 { color: #111827; margin: 0 0 0.5rem 0; }
+    .auth-card p  { color: #6b7280; margin: 0 0 1.5rem 0; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -297,16 +403,38 @@ def render_standings(teams_stats: dict, subtitle: str) -> None:
 
 # ─── OAuth setup screen ───────────────────────────────────────────────────────
 
-def show_oauth_setup() -> None:
+def _trophy_icon_svg() -> str:
+    return """
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M8 21h8"></path>
+            <path d="M12 17v4"></path>
+            <path d="M7 4h10v3a5 5 0 0 1-10 0V4Z"></path>
+            <path d="M7 5H5a2 2 0 0 0 0 4h2"></path>
+            <path d="M17 5h2a2 2 0 1 1 0 4h-2"></path>
+        </svg>
+    """
+
+
+def render_brand_header(subtitle: str) -> None:
     st.markdown(
-        """
+        f"""
         <div class="roto-header">
-            <h1>⚾ Fantasy Baseball Roto Standings</h1>
-            <p>One-time Yahoo authorization required</p>
+            <div class="brand-row">
+                <span class="brand-icon">{_trophy_icon_svg()}</span>
+                <div>
+                    <p class="eyebrow">Fantasy Baseball BB</p>
+                    <h1>Fantasy Baseball BB Roto Standings</h1>
+                </div>
+            </div>
+            <p>{subtitle}</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
+
+
+def show_oauth_setup() -> None:
+    render_brand_header("One-time Yahoo authorization required")
 
     # ── Auto-handle Yahoo's redirect back with ?code= ────────────────────────
     params = st.query_params
@@ -421,14 +549,8 @@ def main() -> None:
     # ── Header ──────────────────────────────────────────────────────────────
     header_col, btn_col = st.columns([7, 1])
     with header_col:
-        st.markdown(
-            """
-            <div class="roto-header">
-                <h1>⚾ Fantasy Baseball Roto Standings</h1>
-                <p>League 469.l.12591 · Head-to-Head league, weekly roto side competition</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
+        render_brand_header(
+            "League 469.l.12591 · Head-to-head league, weekly roto side competition"
         )
     with btn_col:
         st.markdown("<div style='height:1.1rem'></div>", unsafe_allow_html=True)
