@@ -43,6 +43,7 @@ def get_auth_url() -> str:
         "client_id": client_id,
         "redirect_uri": YAHOO_REDIRECT_URI,
         "response_type": "code",
+        "scope": "fspt-r",
     })
     return f"{YAHOO_AUTH_URL}?{params}"
 
