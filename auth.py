@@ -7,6 +7,7 @@ All subsequent runs: call get_access_token() to silently refresh.
 
 import base64
 import os
+import urllib.parse
 import webbrowser
 from pathlib import Path
 
@@ -38,12 +39,12 @@ def _basic_auth_header() -> dict:
 def get_auth_url() -> str:
     _load_env()
     client_id = os.getenv("YAHOO_CLIENT_ID", "")
-    return (
-        f"{YAHOO_AUTH_URL}"
-        f"?client_id={client_id}"
-        f"&redirect_uri={YAHOO_REDIRECT_URI}"
-        "&response_type=code"
-    )
+    params = urllib.parse.urlencode({
+        "client_id": client_id,
+        "redirect_uri": YAHOO_REDIRECT_URI,
+        "response_type": "code",
+    })
+    return f"{YAHOO_AUTH_URL}?{params}"
 
 
 def _save_refresh_token(token: str) -> None:

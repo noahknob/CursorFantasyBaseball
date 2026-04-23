@@ -336,6 +336,9 @@ def show_oauth_setup() -> None:
         "After you approve access, Yahoo will redirect you back here automatically."
     )
 
+    with st.expander("🔍 Debug: view generated auth URL"):
+        st.code(auth_url)
+
     st.stop()
 
 
