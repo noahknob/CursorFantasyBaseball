@@ -5,6 +5,7 @@ Tabs:
   1. This Week    – live weekly roto standings + raw stats
   2. Full Season  – cumulative season roto standings + raw stats
   3. Weekly Winners – cards for each completed week's winner
+  4. Weekly Category Highs – season-best single-week stat per category
 """
 
 from __future__ import annotations
@@ -24,16 +25,24 @@ from auth import (
     has_refresh_token,
 )
 import instant_db
-from roto import ALL_CATS, BATTING_CATS, PITCHING_CATS, calculate_roto
+from roto import (
+    ALL_CATS,
+    BATTING_CATS,
+    CAT_LABELS,
+    PITCHING_CATS,
+    calculate_roto,
+    compute_season_weekly_highs,
+    get_category_leaders,
+)
 from yahoo_api import (
     get_current_week,
-    get_league_managers,
     get_season_stats,
     get_week_stats,
     get_week_team_managers,
 )
 
 INT_STATS = {"R", "HR", "RBI", "SB", "XBH", "W", "SV", "K", "QS"}
+
 
 # ─── Page config & global CSS ─────────────────────────────────────────────────
 
@@ -245,16 +254,6 @@ def save_winners(data: dict) -> None:
         st.warning(f"Could not save winners to InstantDB: {exc}")
 
 
-def _resolve_manager_name(guid: str | None, nickname: str, manager_profiles: dict) -> str:
-    """Return the best available display name for a manager."""
-    if guid:
-        profile = manager_profiles.get(guid, {})
-        first_name = profile.get("first_name", "")
-        if first_name and first_name != guid:
-            return first_name
-    return nickname or guid or ""
-
-
 def backfill_weekly_winners(current_week: int) -> dict:
     """
     For every completed week (1 … current_week-1) not yet in the JSON,
@@ -265,12 +264,6 @@ def backfill_weekly_winners(current_week: int) -> dict:
     winners = load_winners()
     changed = False
 
-    # Resolve real names from Social API (falls back gracefully per manager)
-    try:
-        manager_profiles = cached_league_managers()
-    except Exception:
-        manager_profiles = {}
-
     for week in range(1, current_week):
         week_str = str(week)
 
@@ -280,12 +273,8 @@ def backfill_weekly_winners(current_week: int) -> dict:
                 team_managers = get_week_team_managers(week)
                 team_name = winners[week_str]["team"]
                 mgr_info = team_managers.get(team_name, {})
-                guid = mgr_info.get("guid")
-                nickname = mgr_info.get("nickname", "")
-                winners[week_str]["manager_guid"] = guid
-                winners[week_str]["manager_name"] = _resolve_manager_name(
-                    guid, nickname, manager_profiles
-                ) or team_name
+                winners[week_str]["manager_guid"] = mgr_info.get("guid")
+                winners[week_str]["manager_name"] = mgr_info.get("nickname") or team_name
                 changed = True
             except Exception:
                 pass
@@ -304,17 +293,13 @@ def backfill_weekly_winners(current_week: int) -> dict:
             top = roto_df.iloc[0]
             team_name = top["Team"]
 
-            # Fetch manager GUID from scoreboard and resolve real name
             manager_guid = None
             manager_name = team_name
             try:
                 team_managers = get_week_team_managers(week)
                 mgr_info = team_managers.get(team_name, {})
                 manager_guid = mgr_info.get("guid")
-                nickname = mgr_info.get("nickname", "")
-                manager_name = _resolve_manager_name(
-                    manager_guid, nickname, manager_profiles
-                ) or team_name
+                manager_name = mgr_info.get("nickname") or team_name
             except Exception:
                 pass
 
@@ -523,9 +508,201 @@ def cached_current_week() -> int:
     return get_current_week()
 
 
-@st.cache_data(ttl=3600)
-def cached_league_managers() -> dict:
-    return get_league_managers()
+@st.cache_data(ttl=300)
+def cached_all_weeks_stats(current_week: int) -> dict[int, dict]:
+    all_stats: dict[int, dict] = {}
+    for week in range(1, current_week + 1):
+        try:
+            stats = get_week_stats(week)
+            if stats:
+                all_stats[week] = stats
+        except Exception:
+            pass
+    return all_stats
+
+
+@st.cache_data(ttl=600)
+def cached_week_managers(week: int) -> dict:
+    return get_week_team_managers(week)
+
+
+def _format_stat_value(cat: str, value: float) -> str:
+    if cat in INT_STATS:
+        return f"{value:.0f}"
+    if cat == "AVG":
+        return f"{value:.3f}"
+    if cat in {"ERA", "WHIP"}:
+        return f"{value:.2f}"
+    return f"{value:.1f}"
+
+
+def _leader_display_name(team: str, managers: dict) -> str:
+    mgr = managers.get(team, {})
+    nickname = mgr.get("nickname")
+    if nickname and nickname != team:
+        return f"{nickname} ({team})"
+    return team
+
+
+def _build_category_highs_rows(
+    cats: list[str],
+    leaders: dict[str, list[tuple[str, float]]],
+    managers: dict,
+) -> list[dict]:
+    rows: list[dict] = []
+    for cat in cats:
+        tied = leaders.get(cat, [])
+        if not tied:
+            continue
+        value = tied[0][1]
+        names = [_leader_display_name(team, managers) for team, _ in tied]
+        rows.append(
+            {
+                "Category": CAT_LABELS.get(cat, cat),
+                "Leaders": ", ".join(names),
+                "Value": _format_stat_value(cat, value),
+            }
+        )
+    return rows
+
+
+def _build_season_highs_rows(
+    cats: list[str],
+    records: dict[str, dict],
+    managers_by_week: dict[int, dict],
+) -> list[dict]:
+    rows: list[dict] = []
+    for cat in cats:
+        record = records.get(cat)
+        if not record:
+            continue
+
+        value = record["value"]
+        entries = record["entries"]
+
+        # Group by week so same-week ties read naturally
+        by_week: dict[int, list[str]] = {}
+        for week, team, _ in entries:
+            managers = managers_by_week.get(week, {})
+            by_week.setdefault(week, []).append(_leader_display_name(team, managers))
+
+        leader_parts = [
+            f"{', '.join(names)} (Week {week})"
+            for week, names in sorted(by_week.items())
+        ]
+
+        rows.append(
+            {
+                "Category": CAT_LABELS.get(cat, cat),
+                "Leaders": "; ".join(leader_parts),
+                "Value": _format_stat_value(cat, value),
+            }
+        )
+    return rows
+
+
+def render_weekly_category_highs(current_week: int) -> None:
+    st.markdown(
+        '<p class="roto-subtitle">'
+        "Best single-week performance in each category — ties are listed together"
+        "</p>",
+        unsafe_allow_html=True,
+    )
+
+    try:
+        with st.spinner("Loading weekly stats across the season…"):
+            all_week_stats = cached_all_weeks_stats(current_week)
+    except Exception as exc:
+        st.error(f"Error loading weekly stats: {exc}")
+        return
+
+    if not all_week_stats:
+        st.info("No weekly stats available yet.")
+        return
+
+    season_records = compute_season_weekly_highs(all_week_stats)
+
+    managers_by_week: dict[int, dict] = {}
+    for week in all_week_stats:
+        try:
+            managers_by_week[week] = cached_week_managers(week)
+        except Exception:
+            managers_by_week[week] = {}
+
+    st.subheader("Season Weekly Highs")
+    st.caption(
+        f"Best weekly total in each category across weeks 1–{current_week}."
+    )
+
+    batting_rows = _build_season_highs_rows(
+        BATTING_CATS, season_records, managers_by_week
+    )
+    pitching_rows = _build_season_highs_rows(
+        PITCHING_CATS, season_records, managers_by_week
+    )
+
+    if batting_rows:
+        st.markdown("**Batting**")
+        st.dataframe(
+            pd.DataFrame(batting_rows),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    if pitching_rows:
+        st.markdown("**Pitching**")
+        st.dataframe(
+            pd.DataFrame(pitching_rows),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    st.divider()
+
+    st.subheader("Category Leaders by Week")
+    week_options = list(range(current_week, 0, -1))
+    selected_week = st.selectbox(
+        "Select week",
+        week_options,
+        format_func=lambda w: f"Week {w}",
+        key="weekly_highs_week_select",
+    )
+
+    week_stats = all_week_stats.get(selected_week)
+    if not week_stats:
+        st.warning(f"No stats available for week {selected_week}.")
+        return
+
+    week_leaders = get_category_leaders(week_stats)
+    try:
+        week_managers = cached_week_managers(selected_week)
+    except Exception:
+        week_managers = {}
+
+    st.caption(f"Top team(s) in each category for week {selected_week}.")
+
+    week_batting = _build_category_highs_rows(
+        BATTING_CATS, week_leaders, week_managers
+    )
+    week_pitching = _build_category_highs_rows(
+        PITCHING_CATS, week_leaders, week_managers
+    )
+
+    if week_batting:
+        st.markdown("**Batting**")
+        st.dataframe(
+            pd.DataFrame(week_batting),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    if week_pitching:
+        st.markdown("**Pitching**")
+        st.dataframe(
+            pd.DataFrame(week_pitching),
+            use_container_width=True,
+            hide_index=True,
+        )
 
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
@@ -589,8 +766,13 @@ def main() -> None:
     winners: dict = st.session_state.get("winners", load_winners())
 
     # ── Tabs ─────────────────────────────────────────────────────────────────
-    tab_week, tab_season, tab_history = st.tabs(
-        ["📅 Current Week", "📊 Full Season Roto", "🏆 Previous Winners"]
+    tab_week, tab_season, tab_history, tab_highs = st.tabs(
+        [
+            "📅 Current Week",
+            "📊 Full Season Roto",
+            "🏆 Previous Winners",
+            "📈 Weekly Category Highs",
+        ]
     )
 
     # ── Tab 1: This Week ─────────────────────────────────────────────────────
@@ -724,6 +906,10 @@ def main() -> None:
                         st.warning("No data available for this week.")
                 except Exception as exc:
                     st.error(f"Error loading week {sel_week} stats: {exc}")
+
+    # ── Tab 4: Weekly Category Highs ─────────────────────────────────────────
+    with tab_highs:
+        render_weekly_category_highs(current_week)
 
 
 main()

@@ -18,6 +18,107 @@ ALL_CATS = BATTING_CATS + PITCHING_CATS
 
 LOWER_IS_BETTER = {"ERA", "WHIP"}
 
+CAT_LABELS = {
+    "R": "Runs",
+    "HR": "Home Runs",
+    "RBI": "RBI",
+    "SB": "Stolen Bases",
+    "AVG": "Batting Average",
+    "XBH": "Extra Base Hits",
+    "W": "Wins",
+    "SV": "Saves",
+    "K": "Strikeouts",
+    "ERA": "ERA",
+    "WHIP": "WHIP",
+    "QS": "Quality Starts",
+}
+
+
+def get_category_leaders(teams_stats: dict) -> dict[str, list[tuple[str, float]]]:
+    """
+    For each category, return all teams tied for the best weekly value.
+
+    Returns {cat: [(team_name, value), ...]}.
+    """
+    if not teams_stats:
+        return {}
+
+    leaders: dict[str, list[tuple[str, float]]] = {}
+    for cat in ALL_CATS:
+        best_val: float | None = None
+        tied: list[tuple[str, float]] = []
+
+        for team, stats in teams_stats.items():
+            raw = stats.get(cat, 0)
+            try:
+                val = float(raw) if raw is not None else 0.0
+            except (ValueError, TypeError):
+                val = 0.0
+
+            if best_val is None:
+                best_val = val
+                tied = [(team, val)]
+            elif cat in LOWER_IS_BETTER:
+                if val < best_val:
+                    best_val = val
+                    tied = [(team, val)]
+                elif val == best_val:
+                    tied.append((team, val))
+            else:
+                if val > best_val:
+                    best_val = val
+                    tied = [(team, val)]
+                elif val == best_val:
+                    tied.append((team, val))
+
+        leaders[cat] = tied
+    return leaders
+
+
+def compute_season_weekly_highs(
+    all_week_stats: dict[int, dict],
+) -> dict[str, dict]:
+    """
+    Best single-week performance per category across all supplied weeks.
+
+    Returns {cat: {"value": float, "entries": [(week, team, value), ...]}}
+    where entries are every team/week that tied for the season weekly high.
+    """
+    records: dict[str, dict] = {}
+
+    for cat in ALL_CATS:
+        best_val: float | None = None
+        entries: list[tuple[int, str, float]] = []
+
+        for week, teams_stats in all_week_stats.items():
+            for team, stats in teams_stats.items():
+                raw = stats.get(cat, 0)
+                try:
+                    val = float(raw) if raw is not None else 0.0
+                except (ValueError, TypeError):
+                    val = 0.0
+
+                if best_val is None:
+                    best_val = val
+                    entries = [(week, team, val)]
+                elif cat in LOWER_IS_BETTER:
+                    if val < best_val:
+                        best_val = val
+                        entries = [(week, team, val)]
+                    elif val == best_val:
+                        entries.append((week, team, val))
+                else:
+                    if val > best_val:
+                        best_val = val
+                        entries = [(week, team, val)]
+                    elif val == best_val:
+                        entries.append((week, team, val))
+
+        if best_val is not None:
+            records[cat] = {"value": best_val, "entries": entries}
+
+    return records
+
 
 def calculate_roto(teams_stats: dict) -> pd.DataFrame:
     """
